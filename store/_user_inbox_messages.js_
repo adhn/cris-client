@@ -1,0 +1,374 @@
+import gql from 'graphql-tag';
+
+
+const wellKnownFolderName = 'inbox'
+
+const QUERY_USER_MESSAGES = gql`
+query GetMessages(
+    $q:String
+    $sort_by: String
+    $sort_desc: Boolean
+    $per_page: Int
+    $page: Int
+    $isUncategorized: Boolean
+    $isCategorized: Boolean
+    $maxAgeInDays: Int
+  	$wellKnownFolderName: String
+  ) {
+    authenticatedUserMessages(
+      q:$q
+      sort_by:$sort_by
+      sort_desc:$sort_desc
+      per_page:$per_page
+      page: $page
+      isUncategorized: $isUncategorized
+      isCategorized: $isCategorized
+      maxAgeInDays: $maxAgeInDays
+      wellKnownFolderName: $wellKnownFolderName
+    ) {
+        total
+        per_page
+        current_page
+        from
+        to
+        data {
+          id
+          internet_message_id
+          subject
+          from
+          to_recipients
+          bcc_recipients
+          cc_recipients
+          body_content
+          body_content_type
+          category_suggestions
+          companies {
+            id
+            category_id
+          }
+          projects {
+            id
+            category_id
+          }
+          contacts {
+            id,display_name
+            emailAddresses {
+              id,display_name,email
+            }
+            field
+          }
+          users {
+            user_id
+            created_date_time
+            last_modified_date_time
+            weblink
+            is_read
+          }
+        }
+    }
+  }
+`
+
+const QUERY_FETCH_COMPANIES_PROJECTS = gql`
+query GetMessages(
+    $companies_per_page: Int,
+    $companies_page: Int,
+    $projects_per_page: Int,
+    $projects_page: Int
+  ) {
+    companies(
+        per_page: $companies_per_page,
+        page: $companies_page
+    ) {
+        total
+        data {
+            id
+            name
+            category_id
+        }
+    }
+    projects(
+        per_page: $projects_per_page,
+        page: $projects_page
+    ) {
+        total
+        data {
+            id
+            name
+            category_id
+        }
+    }
+}
+`
+
+const MUTATION_SAVE_MESSAGE_CATEGORIES = gql`
+mutation AssociateMessageWithCategories($messageCategories:MessageCategoriesInputType) {
+    AssociateMessageWithCategories(MessageCategoriesInput:$messageCategories) {
+      id
+      companies {
+        id
+        category_id
+      }
+      projects {
+        id
+        category_id
+      }
+  	}
+}
+`
+
+
+const processMessages = function(state,messages) {
+    // TODO implement this to match up to, from, cc with contact id's
+
+    var mergedMessages = []
+    var abortUserLoop = false;
+    var messagesLength = messages.length
+    var message = {};
+    for (var i = 0; i < messagesLength; i++) {
+        
+        message = _.assign({},messages[i])
+
+        /**
+         * Merging message_user pivot data into message object
+         *  created_date_time
+         *  last_modified_date_time
+         *  weblink
+         *  is_read
+         */
+        abortUserLoop = false
+        var usersLength = messages[i].users.length
+        for (var j = 0; j < usersLength && !abortUserLoop; j++) {
+            // console.info('user',messages[i].users[j])
+            if(messages[i].users[j].user_id == state.user.id) {
+                // console.info('merged message',i)
+                message = _.assign({},messages[i],messages[i].users[j])
+                abortUserLoop = true; // leave inner loop
+            }
+        }
+
+        /**
+         * 
+         */
+        var contactsLength = messages[i].contacts.length
+        var contacts = {
+            contact_from: {},
+            contact_to_recipients: [],
+            contact_cc_recipients: [],
+            contact_bcc_recipients: [],
+            to_recipients: [],
+            cc_recipients: [],
+            bcc_recipients: []
+        }
+
+        for(var k = 0; k < contactsLength; k++) {
+            switch(messages[i].contacts[k].field) {
+                case 'FROM':
+                    contacts.contact_from = messages[i].contacts[k] 
+                    break;
+                case 'TO':
+                    contacts.to_recipients = removeContactFromRecipientArray(message,messages[i].contacts[k],'to_recipients')
+                    contacts.contact_to_recipients.push(messages[i].contacts[k]) 
+                    break;
+                case 'CC':
+                    contacts.cc_recipients = removeContactFromRecipientArray(message,messages[i].contacts[k],'cc_recipients')
+                    contacts.contact_cc_recipients.push(messages[i].contacts[k]) 
+                    break;
+                case 'BCC':
+                    contacts.bcc_recipients = removeContactFromRecipientArray(message,messages[i].contacts[k],'bcc_recipients')
+                    contacts.contact_bcc_recipients.push(messages[i].contacts[k])
+                    break;
+            }
+            
+        }
+        // console.info('contacts',contacts)
+        message = _.assign(message,contacts)
+        // console.info('message',message)
+
+        mergedMessages.push(message)
+    }
+    // console.info('messages',mergedMessages)
+    return mergedMessages
+}
+
+const removeContactFromRecipientArray = function(message,contact,recipientArray) {
+    var recipients = []
+    // iterate contact['emailAddresses'] as emailAddress['email']
+    var emailAddressesLength = contact['emailAddresses'].length
+    for (var i = 0; i < emailAddressesLength; i++) {
+        var email = contact['emailAddresses'][i].email
+        var recipientArrayLength = message[recipientArray].length
+        // iterate message[recipientArray] as recipientString
+        for (var k = 0; k < recipientArrayLength; k++) {
+            var recipientString = message[recipientArray][k]
+            // if recipientString contains emailAddress['email']
+            var idx = recipientString.indexOf(email)
+            // console.info('idx',idx)
+            if(idx => 0) {
+                // email was found in recipientString, remove from recipientArray  
+                // console.info('will we ever come here 1')
+                // message[recipientArray].splice(k,1)
+                recipients.push(message[recipientArray][k])
+                // console.info('will we ever come here 2')
+            }
+        }
+    }
+    recipients = _.difference(message[recipientArray],recipients)
+    // recipients = message[recipientArray]
+    return recipients
+}
+
+export const state = () => ({
+    messages: [],
+    pagination: {
+        page: 1,
+        rowsPerPage: 10,
+        sortBy: '',
+        descending: false
+    },
+    total: 0,
+    search: '',
+    messagesLoading: false,
+    categories: [],
+    isCategorized: false,
+    isUncategorized: true,
+    user: null
+})
+
+export const getters = {
+    messages: state => state.messages,
+    pagination: state => state.pagination,
+    total: state => state.total,
+    search: state => state.search,
+    messagesLoading: state => state.messagesLoading,
+    categories: state => state.categories,
+    isCategorized: state => state.isCategorized,
+    isUncategorized: state => state.isUncategorized,
+    user: state => state.user
+}
+
+export const mutations = {
+    messages(state,payload) {
+        state.messages = processMessages(state,payload)
+    },
+    pagination(state,payload) {
+        state.pagination = payload
+    },
+    search (state,payload) {
+        state.search = payload
+    },
+    total(state,payload) {
+        state.total = payload
+    },
+    messagesLoading(state,payload) {
+        state.messagesLoading = payload
+    },
+    companies(state,payload) {
+        let companies =  [...payload]
+        _.forEach(companies,function(company) {
+            state.categories.push(company)
+        })
+    },
+    projects(state,payload) {
+        let projects = [...payload]
+        _.forEach(projects,function(project) {
+            state.categories.push(project)
+        })
+    },
+    sortCategories(state) {
+        state.categories = _.orderBy(state.categories, ['name'],['asc']); // Use Lodash to sort array by 'name'
+    },
+    isCategorized(state,payload) {
+        console.info('isCategorized',payload)
+        state.isCategorized = payload
+    },
+    isUncategorized(state,payload) {
+        console.info('isUncategorized',payload)
+        state.isUncategorized = payload
+    },
+    user(state,payload) {
+        state.user = payload
+    }
+}
+
+export const actions = {
+    async updateCategories({state,commit,dispatch},payload) {
+        // TODO, loading for CategoriesAutoCompleteRender
+        // payload.messageId
+        // payload.selectedCategories
+        let client = this.app.apolloProvider.defaultClient
+        const response = await client.mutate({
+            mutation: MUTATION_SAVE_MESSAGE_CATEGORIES,
+            variables: {
+                messageCategories: {
+                    id: payload.messageId,
+                    categories: payload.selectedCategories
+                }
+            }   
+        }).then(function(response) {
+            // TODO, update state.messages, map categories to projects and companies
+            return response
+        }).catch(function(error){
+
+        });    
+    },
+    async fetchMessages({state,commit,dispatch,rootState,rootGetters}) {
+        console.info(wellKnownFolderName,state.isUncategorized,state.isCategorized)
+        let client = this.app.apolloProvider.defaultClient
+        commit('messagesLoading',true)
+        const response = await client.query({
+            query: QUERY_USER_MESSAGES,
+            variables: {
+                "q":state.search,
+                "sort_by":state.pagination.sortBy,
+                "sort_desc":state.pagination.descending,
+                "per_page":state.pagination.rowsPerPage,
+                "page":state.pagination.page,
+                "isUncategorized": state.isUncategorized,
+                "isCategorized": state.isCategorized,
+                "wellKnownFolderName":wellKnownFolderName,
+                // "maxAgeInDays": 0
+            }
+        })
+        .then(function(response) {
+            // every message has all users and the pivot data associated, 
+            // we only need the pivot data of the authenticated user
+            // and since a mutation (messages) does not have access to rootState/rootGetters
+            // which is needed to get the correct pivot data from the colection
+            // we get the authenticated user here,
+            let user = rootGetters['auth/user']
+            commit('user',user)
+
+
+            // but it is used in processMessages function
+            commit('messages',response.data.authenticatedUserMessages.data)
+
+
+            commit('total',response.data.authenticatedUserMessages.total)
+            commit('messagesLoading',false)
+        })
+        .catch(function(error){
+
+        });
+    },
+    async fetchCompaniesAndProjects({state,commit,dispatch}) {
+        let client = this.app.apolloProvider.defaultClient
+        const response = await client.query({
+            query: QUERY_FETCH_COMPANIES_PROJECTS,
+            variables: {
+                "companies_per_page": 99999,
+                "companies_page": 1,
+                "projects_per_page": 99999,
+                "projects_page": 1
+            }
+        })
+        .then(function(response) {  
+            commit('companies',response.data.companies.data)
+            commit('projects',response.data.projects.data)
+            commit('sortCategories')
+        })
+        .catch(function(error){
+
+        });
+    }
+}

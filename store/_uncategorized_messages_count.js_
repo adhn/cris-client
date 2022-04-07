@@ -1,0 +1,54 @@
+import gql from 'graphql-tag';
+
+
+const QUERY_USER_MESSAGES_UNCATEGORIZED_COUNTS = gql`
+query {
+    authenticatedUserNumberOfUncategorizedMessages {
+      total
+      inbox
+      sentitems
+    }
+  }
+`
+
+export const state = () => ({
+    'total': 0,
+    'inbox': 0,
+    'sentitems': 0
+})
+
+export const getters = {
+    total: state => state.total,
+    inbox: state => state.inbox,
+    sentitems: state => state.sentitems,
+}
+export const actions = {
+    async fetchUncategorizedMessagesCount({state,commit,dispatch}) {
+        let client = this.app.apolloProvider.defaultClient
+        const response = await client.query({
+            query: QUERY_USER_MESSAGES_UNCATEGORIZED_COUNTS,
+        })
+        .then(function(response) {  
+            commit('total',response.data.authenticatedUserNumberOfUncategorizedMessages.total)
+            commit('inbox',response.data.authenticatedUserNumberOfUncategorizedMessages.inbox)
+            commit('sentitems',response.data.authenticatedUserNumberOfUncategorizedMessages.sentitems)
+        })
+        .catch(function(error){
+
+        });
+    },
+
+
+}
+
+export const mutations = {
+    total(state,payload) {
+        state.total = payload
+    },
+    inbox (state,payload) {
+        state.inbox = payload
+    },
+    sentitems(state,payload) {
+        state.sentitems = payload
+    },
+}
